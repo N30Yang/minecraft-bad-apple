@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+"""Turn an MP4 (or any OpenCV/FFmpeg-readable video) into a Minecraft video pack."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import re
+import shutil
+import subprocess
+import sys
+import zipfile
+from pathlib import Path
+
+import cv2
+
+NAMESPACE = "blockvideo"
+
+COLOR_PALETTE = {
+    "minecraft:black_concrete": (8, 10, 15),
+    "minecraft:gray_concrete": (55, 58, 62),
+    "minecraft:light_gray_concrete": (125, 125, 115),
+    "minecraft:white_concrete": (207, 213, 214),
+    "minecraft:brown_concrete": (96, 60, 32),
+    "minecraft:red_concrete": (142, 33, 33),
+    "minecraft:orange_concrete": (224, 97, 0),
+    "minecraft:yellow_concrete": (241, 175, 21),
+    "minecraft:lime_concrete": (94, 169, 24),
+    "minecraft:green_concrete": (73, 91, 36),
+    "minecraft:cyan_concrete": (21, 119, 136),
+    "minecraft:light_blue_concrete": (36, 137, 199),
+    "minecraft:blue_concrete": (44, 46, 143),
+    "minecraft:purple_concrete": (100, 31, 156),
+    "minecraft:magenta_concrete": (169, 48, 159),
+    "minecraft:pink_concrete": (214, 101, 143),
+    "minecraft:black_wool": (20, 21, 25),
+    "minecraft:gray_wool": (62, 68, 71),
+    "minecraft:light_gray_wool": (142, 142, 135),
+    "minecraft:white_wool": (234, 236, 237),
+    "minecraft:brown_wool": (114, 71, 40),
+    "minecraft:red_wool": (161, 39, 35),
+    "minecraft:orange_wool": (240, 118, 19),
+    "minecraft:yellow_wool": (249, 198, 39),
+    "minecraft:lime_wool": (112, 185, 25),
+    "minecraft:green_wool": (84, 109, 27),
+    "minecraft:cyan_wool": (21, 137, 145),
+    "minecraft:light_blue_wool": (58, 175, 217),
+    "minecraft:blue_wool": (53, 57, 157),
+    "minecraft:purple_wool": (121, 42, 172),
+    "minecraft:magenta_wool": (189, 68, 179),
+    "minecraft:pink_wool": (237, 141, 172),
+    "minecraft:black_terracotta": (37, 22, 16),
+    "minecraft:gray_terracotta": (57, 42, 35),
+    "minecraft:light_gray_terracotta": (135, 106, 97),
+    "minecraft:white_terracotta": (210, 178, 161),
+    "minecraft:brown_terracotta": (77, 51, 36),
+    "minecraft:red_terracotta": (143, 61, 47),
+    "minecraft:orange_terracotta": (161, 83, 37),
+    "minecraft:yellow_terracotta": (186, 133, 35),
+    "minecraft:lime_terracotta": (103, 117, 52),
+    "minecraft:green_terracotta": (76, 83, 42),
+    "minecraft:cyan_terracotta": (87, 91, 91),
+    "minecraft:light_blue_terracotta": (113, 108, 137),
+    "minecraft:blue_terracotta": (74, 59, 91),
+    "minecraft:purple_terracotta": (118, 70, 86),
+    "minecraft:magenta_terracotta": (150, 88, 109),
+    "minecraft:pink_terracotta": (162, 78, 79),
+    "minecraft:snow_block": (239, 251, 251),
+    "minecraft:quartz_block": (235, 229, 222),
+    "minecraft:smooth_sandstone": (219, 207, 163),
+    "minecraft:end_stone": (219, 224, 158),
+    "minecraft:sandstone": (216, 203, 155),
+    "minecraft:oak_planks": (162, 130, 79),
+    "minecraft:spruce_planks": (114, 84, 48),
+    "minecraft:acacia_planks": (168, 90, 50),
+    "minecraft:cherry_planks": (226, 178, 172),
+    "minecraft:mangrove_planks": (117, 54, 48),
+    "minecraft:warped_planks": (43, 104, 99),
+    "minecraft:crimson_planks": (101, 48, 70),
+    "minecraft:stone": (125, 125, 125),
+    "minecraft:cobblestone": (127, 127, 127),
+    "minecraft:deepslate": (76, 76, 80),
+    "minecraft:tuff": (108, 109, 102),
+    "minecraft:mud": (60, 57, 60),
+    "minecraft:netherrack": (111, 54, 52),
+    "minecraft:nether_bricks": (44, 21, 26),
+    "minecraft:prismarine": (99, 156, 151),
+    "minecraft:dark_prismarine": (51, 91, 75),
+    "minecraft:purpur_block": (169, 125, 169),
+    "minecraft:lapis_block": (30, 67, 140),
+    "minecraft:diamond_block": (98, 237, 228),
+    "minecraft:emerald_block": (42, 203, 87),
+    "minecraft:gold_block": (246, 208, 61),
+    "minecraft:raw_iron_block": (166, 135, 107),
+    "minecraft:raw_copper_block": (154, 105, 79),
+    "minecraft:oxidized_copper": (82, 162, 132),
+}
+
+def block_id(value: str) -> str:
+    if not re.fullmatch(r"(?:[a-z0-9_.-]+:)?[a-z0-9_./-]+(?:\[[^\]]+\])?", value):
+        raise argparse.ArgumentTypeError(f"invalid block state")
+    return value if ":" in value else "minecraft:" + value
+
+def size(value:str) -> tuple[int, int]:
+    match = re.fullmatch(r"(\d+)[xX](\d+)", value)
+    if not match or min(map(int, match.groups())) < 1:
+        raise argparse.ArgumentTypeError("size must look like 80:45")
+    return int(match.group(1)), int(match.group(2))
+
+def byte_value(value:str) -> int:
+    try:
+        number = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be a whole number form 0 to 255")
+    if not 0 <= number <= 255:
+        raise argparse.ArgumentTypeError("must be from 0 to 255")
+    return number
+
+def parser() -> argparse.ArgumentParser:
+    p=argparse.ArgumentParser(
+        description="Generate a java edition datapack and resource pack to display a mp4 or webm",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
