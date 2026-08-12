@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Turn an MP4 (or any OpenCV/FFmpeg-readable video) into a Minecraft video pack."""
+"""Turn an MP4 or WebM video into a Minecraft video pack."""
 
 from __future__ import annotations
 
 import argparse
+from fractions import Fraction
 import json
 import math
 import re
@@ -12,8 +13,6 @@ import subprocess
 import sys
 import zipfile
 from pathlib import Path
-
-import cv2
 
 NAMESPACE = "blockvideo"
 
@@ -97,18 +96,21 @@ COLOR_PALETTE = {
     "minecraft:oxidized_copper": (82, 162, 132),
 }
 
+
 def block_id(value: str) -> str:
     if not re.fullmatch(r"(?:[a-z0-9_.-]+:)?[a-z0-9_./-]+(?:\[[^\]]+\])?", value):
         raise argparse.ArgumentTypeError(f"invalid block state")
     return value if ":" in value else "minecraft:" + value
 
-def size(value:str) -> tuple[int, int]:
+
+def size(value: str) -> tuple[int, int]:
     match = re.fullmatch(r"(\d+)[xX](\d+)", value)
     if not match or min(map(int, match.groups())) < 1:
         raise argparse.ArgumentTypeError("size must look like 80:45")
     return int(match.group(1)), int(match.group(2))
 
-def byte_value(value:str) -> int:
+
+def byte_value(value: str) -> int:
     try:
         number = int(value)
     except ValueError:
@@ -117,30 +119,148 @@ def byte_value(value:str) -> int:
         raise argparse.ArgumentTypeError("must be from 0 to 255")
     return number
 
+
 def parser() -> argparse.ArgumentParser:
-    p=argparse.ArgumentParser(
+    p = argparse.ArgumentParser(
         description="Generate a java edition datapack and resource pack to display a mp4 or webm",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument("video", type=Path, help="any .mp4 or .webm video")
     p.add_argument("-o", "--output", type=Path, default=Path("output"))
-    p.add_argument("--size", type=size, default=(80, 45), metavar="WIDTHxHEIGHT eg 160x90")
-    p.add_argument("--origin", nargs=3, type=int, default=(0, 64, 0), metavar=("X", "Y", "Z"),
-                   help="top-left block of the screen, where the video spawns")
-    p.add_argument("--plane", choices=("xy", "xz", "zy"), default="xy",
-        help="screen axes; xy is a vertical wall, xz is birds eye view, zy is a side wall")
+    p.add_argument(
+        "--size", type=size, default=(80, 45), metavar="WIDTHxHEIGHT eg 160x90"
+    )
+    p.add_argument(
+        "--origin",
+        nargs=3,
+        type=int,
+        default=(0, 64, 0),
+        metavar=("X", "Y", "Z"),
+        help="top-left block of the screen, where the video spawns",
+    )
+    p.add_argument(
+        "--plane",
+        choices=("xy", "xz", "zy"),
+        default="xy",
+        help="screen axes; xy is a vertical wall, xz is birds eye view, zy is a side wall",
+    )
     p.add_argument("--mode", choices=("mono", "color"), default="mono")
     p.add_argument("--foreground", type=block_id, default="minecraft:white_concrete")
-    p.add_argument("--background", type=block_id, default="minecraft:air",
-                    help="dark pixel block; defaults to air")
+    p.add_argument(
+        "--background",
+        type=block_id,
+        default="minecraft:air",
+        help="dark pixel block; defaults to air",
+    )
     p.add_argument("--threshold", type=byte_value, default=128)
-    p.add_argument("--fps", type=float, default=20.0, help="1-20; Minecraft runs at 20 ticks per second")
-    p.add_argument("--pack-format", type=int, default=48,
-                    help="data pack format (48 is java 1.21/1.21.1)")
-    p.add_argument("--resource-pack-format", type=int, default=34,
-                    help="resource pack format, 34 targets 1.21/1.21.1)")
-    p.add_argument("--legacy-folders", action="store_true",
-                    help="use functions/tags/functions for minecraft 1.20.4 and older")
+    p.add_argument(
+        "--fps",
+        type=float,
+        default=20.0,
+        help="1-20; Minecraft runs at 20 ticks per second",
+    )
+    p.add_argument(
+        "--pack-format",
+        type=int,
+        default=48,
+        help="data pack format (48 is java 1.21/1.21.1)",
+    )
+    p.add_argument(
+        "--resource-pack-format",
+        type=int,
+        default=34,
+        help="resource pack format, 34 targets 1.21/1.21.1)",
+    )
+    p.add_argument(
+        "--legacy-folders",
+        action="store_true",
+        help="use functions/tags/functions for minecraft 1.20.4 and older",
+    )
     p.add_argument("--overwrite", action="store_true")
     return p
 
+
+def write(path: Path, data: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(data, encoding="utf-8")
+
+
+def make_zip(source: Path, destination: Path) -> None:
+    with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for file in sorted(source.rglob("*")):
+            if file.is_file():
+                archive.write(file, file.relative_to(source))
+
+
+def coords(
+    origin: tuple[int, int, int], plane: str, x: int, y: int
+) -> tuple[int, int, int]:
+    ox, oy, oz = origin
+    if plane == "xy":
+        return ox + x, oy - y, oz
+    if plane == "xz":
+        return ox + x, oy, oz + y
+    return ox, oy - y, oz + x
+
+def nearest_block(bgr, palette_items) -> str:
+    b, g, r = map(int, bgr)
+    return min(palette_items, key=lambda item:
+               2 * (r - item[1][0]) ** 2 + 4 * (g - item[1][1]) ** 2 + 3 * (b - item[1][2]) ** 2)[0]
+
+def extract_audio(video: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(video),
+                "-vn", "-c:a", "libvorbis", "-q:a", "5", str(destination)]
+    try:
+        subprocess.run(command, check=True)
+    except FileNotFoundError:
+        raise SystemExit("FFMpeg is required for audio. Install it and run again.")
+    except subprocess.CalledProcessError:
+        raise SystemExit("FFMpeg could not etract audio from this video.")
+
+def probe_video(video: Path) -> tuple[str, int, int, float]:
+    command = ["ffprobe", "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "stream=codec_name,width,height,avg_frame_rate",
+                "-of", "json", str(video)]
+    try:
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
+        stream = json.loads(result.stdout)["streams"][0]
+        fps = float(Fraction(stream["avg_frame_rate"])), int(stream["height"]), fps
+        return stream["codec_name"], int(stream["width"]), int(stream["height"]), fps
+    except FileNotFoundError:
+        raise SystemExit("FFMpeg and FFprobe are required. install and try again.")
+    except (subprocess.CalledProcessError, KeyError, IndexError, ValueError, json.JSONDecodeError):
+        raise SystemExit("FFprobe could not read the video stream.")
+
+def ffmpeg_frames(video: Path, width: int, height: int, codec: str):
+    command = ["ffmpeg", "-hide-banner", "-loglevel", "error"]
+    if codec == "av1":
+        command += ["-c:v", "libdav1d"]
+    command += ["-i", str(video), "-map", "0:v:0", "-an",
+                "-vf", f"scale={width}:{height}:flags=area",
+                "-pix_fmt", "bgr24", "-f", "rawvideo", "pipe:1"]
+    try:
+        process = subprocess.Popen(command, stdout=subprocess.PIPE)
+    except FileNotFoundError:
+        raise SystemExit("FFmpeg is required. install it and try again.")
+
+    frame_bytes = width * height * 3
+    assert process.stdout is not None
+    try:
+        while True:
+            data = process.stdout.read(frame_bytes)
+            if not data:
+                break
+            while len(data) < frame_bytes:
+                chunk = process.stdout.read(frame_bytes - len(data))
+                if not chunk:
+                    break
+                data += chunk
+            if len(data) != frame_bytes:
+                break
+            yield data
+    finally:
+        process.stdout.close()
+        return_code = process.wait()
+    if return_code != 0:
+        raise SystemExit("FFmpeg could not decode the video frames.")
