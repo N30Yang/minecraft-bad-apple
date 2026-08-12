@@ -122,3 +122,25 @@ def parser() -> argparse.ArgumentParser:
         description="Generate a java edition datapack and resource pack to display a mp4 or webm",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
+    p.add_argument("video", type=Path, help="any .mp4 or .webm video")
+    p.add_argument("-o", "--output", type=Path, default=Path("output"))
+    p.add_argument("--size", type=size, default=(80, 45), metavar="WIDTHxHEIGHT eg 160x90")
+    p.add_argument("--origin", nargs=3, type=int, default=(0, 64, 0), metavar=("X", "Y", "Z"),
+                   help="top-left block of the screen, where the video spawns")
+    p.add_argument("--plane", choices=("xy", "xz", "zy"), default="xy",
+        help="screen axes; xy is a vertical wall, xz is birds eye view, zy is a side wall")
+    p.add_argument("--mode", choices=("mono", "color"), default="mono")
+    p.add_argument("--foreground", type=block_id, default="minecraft:white_concrete")
+    p.add_argument("--background", type=block_id, default="minecraft:air",
+                    help="dark pixel block; defaults to air")
+    p.add_argument("--threshold", type=byte_value, default=128)
+    p.add_argument("--fps", type=float, default=20.0, help="1-20; Minecraft runs at 20 ticks per second")
+    p.add_argument("--pack-format", type=int, default=48,
+                    help="data pack format (48 is java 1.21/1.21.1)")
+    p.add_argument("--resource-pack-format", type=int, default=34,
+                    help="resource pack format, 34 targets 1.21/1.21.1)")
+    p.add_argument("--legacy-folders", action="store_true",
+                    help="use functions/tags/functions for minecraft 1.20.4 and older")
+    p.add_argument("--overwrite", action="store_true")
+    return p
+
