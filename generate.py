@@ -264,3 +264,41 @@ def ffmpeg_frames(video: Path, width: int, height: int, codec: str):
         return_code = process.wait()
     if return_code != 0:
         raise SystemExit("FFmpeg could not decode the video frames.")
+    
+def main() -> None:
+    args = parser().parse.args()
+    if not args.video.is_file():
+        raise SystemExit(f"video not found: {args.video}")
+    if args.video.suffix.lower() not in {".mp4", ".webm"}:
+        raise SystemExit("input must be an .mp4 or .webm")
+    if not (1 <= args.fps <= 20):
+        raise SystemExit("--fps must be between 1 and 20")
+    if args.output.exists():
+        if not args.overwrite:
+            raise SystemExit(f"Ouput exists: {args.output} (pass --overwrite to replace it)")
+        shutil.rmtree(args.output)
+    
+    datapack = args.output / "datapack"
+    resourcepack = args.output/"resourcepack"
+    has_audio = True
+    function_dir = "functions" if args.legacy_folders else "function"
+    tag_dir = "functions" if args.legacy_folders else "function"
+    functions = datapack / "data" / NAMESPACE / function_dir
+
+    datapack_meta = {"pack": {"pack_format": args.pack_format, "description": "Video made with block video"}}
+    write(datapack/"pack.mcmeta",json.dumps(datapack_meta, indent=2))
+    if has_audio:
+        resourcepack_meta = {"pack": {"pack_format": args.pack_format, "description": "Video made with Block Video"}}
+        write(resourcepack / "pack.mcmeta", json.dumps(resourcepack_meta, indent=2))
+    write(datapack / "data/minecraft/tags" / tag_dir / "load.json",
+          json.dumps({"values": [f"{NAMESPACE}:load"]}, indent=2))
+    write(datapack / "data/minecraft/tags" / tag_dir / "tick.json",
+          json.dumps({"values": [f"{NAMESPACE}:tick"]}, indent=2))
+    
+    if has_audio:
+        sounds = {"video": {"sounds": [{"name": f"{NAMESPACE}:video", "stream": True}]}}
+        write(resourcepack / "assets" / NAMESPACE / "sounds.json", json.dumps(sounds, indent=2))
+        extract_audio(args.video, resourcepack / "assets" / NAMESPACE / "sounds/video.ogg")
+    
+    codec, _, _, source_fps = probe_video(args.video)
+    
