@@ -106,7 +106,7 @@ def block_id(value: str) -> str:
 def size(value: str) -> tuple[int, int]:
     match = re.fullmatch(r"(\d+)[xX](\d+)", value)
     if not match or min(map(int, match.groups())) < 1:
-        raise argparse.ArgumentTypeError("size must look like 80:45")
+        raise argparse.ArgumentTypeError("size must look like 80x45")
     return int(match.group(1)), int(match.group(2))
 
 
@@ -169,7 +169,7 @@ def parser() -> argparse.ArgumentParser:
         "--resource-pack-format",
         type=int,
         default=34,
-        help="resource pack format, 34 targets 1.21/1.21.1)",
+        help="resource pack format, 34 targets 1.21/1.21.1",
     )
     p.add_argument(
         "--legacy-folders",
@@ -202,43 +202,90 @@ def coords(
         return ox + x, oy, oz + y
     return ox, oy - y, oz + x
 
+
 def nearest_block(bgr, palette_items) -> str:
     b, g, r = map(int, bgr)
-    return min(palette_items, key=lambda item:
-               2 * (r - item[1][0]) ** 2 + 4 * (g - item[1][1]) ** 2 + 3 * (b - item[1][2]) ** 2)[0]
+    return min(
+        palette_items,
+        key=lambda item: 2 * (r - item[1][0]) ** 2
+        + 4 * (g - item[1][1]) ** 2
+        + 3 * (b - item[1][2]) ** 2,
+    )[0]
+
 
 def extract_audio(video: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
-    command = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", str(video),
-                "-vn", "-c:a", "libvorbis", "-q:a", "5", str(destination)]
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(video),
+        "-vn",
+        "-c:a",
+        "libvorbis",
+        "-q:a",
+        "5",
+        str(destination),
+    ]
     try:
         subprocess.run(command, check=True)
     except FileNotFoundError:
         raise SystemExit("FFMpeg is required for audio. Install it and run again.")
     except subprocess.CalledProcessError:
-        raise SystemExit("FFMpeg could not etract audio from this video.")
+        raise SystemExit("FFMpeg could not extract audio from this video.")
+
 
 def probe_video(video: Path) -> tuple[str, int, int, float]:
-    command = ["ffprobe", "-v", "error", "-select_streams", "v:0",
-                "-show_entries", "stream=codec_name,width,height,avg_frame_rate",
-                "-of", "json", str(video)]
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=codec_name,width,height,avg_frame_rate",
+        "-of",
+        "json",
+        str(video),
+    ]
     try:
         result = subprocess.run(command, check=True, capture_output=True, text=True)
         stream = json.loads(result.stdout)["streams"][0]
-        fps = float(Fraction(stream["avg_frame_rate"])), int(stream["height"]), fps
+        fps = float(Fraction(stream["avg_frame_rate"]))
         return stream["codec_name"], int(stream["width"]), int(stream["height"]), fps
     except FileNotFoundError:
         raise SystemExit("FFMpeg and FFprobe are required. install and try again.")
-    except (subprocess.CalledProcessError, KeyError, IndexError, ValueError, json.JSONDecodeError):
+    except (
+        subprocess.CalledProcessError,
+        KeyError,
+        IndexError,
+        ValueError,
+        json.JSONDecodeError,
+    ):
         raise SystemExit("FFprobe could not read the video stream.")
 
+
 def ffmpeg_frames(video: Path, width: int, height: int, codec: str):
-    command = ["ffmpeg", "-hide-banner", "-loglevel", "error"]
+    command = ["ffmpeg", "-hide_banner", "-loglevel", "error"]
     if codec == "av1":
         command += ["-c:v", "libdav1d"]
-    command += ["-i", str(video), "-map", "0:v:0", "-an",
-                "-vf", f"scale={width}:{height}:flags=area",
-                "-pix_fmt", "bgr24", "-f", "rawvideo", "pipe:1"]
+    command += [
+        "-i",
+        str(video),
+        "-map",
+        "0:v:0",
+        "-an",
+        "-vf",
+        f"scale={width}:{height}:flags=area",
+        "-pix_fmt",
+        "bgr24",
+        "-f",
+        "rawvideo",
+        "pipe:1",
+    ]
     try:
         process = subprocess.Popen(command, stdout=subprocess.PIPE)
     except FileNotFoundError:
@@ -264,9 +311,10 @@ def ffmpeg_frames(video: Path, width: int, height: int, codec: str):
         return_code = process.wait()
     if return_code != 0:
         raise SystemExit("FFmpeg could not decode the video frames.")
-    
+
+
 def main() -> None:
-    args = parser().parse.args()
+    args = parser().parse_args()
     if not args.video.is_file():
         raise SystemExit(f"video not found: {args.video}")
     if args.video.suffix.lower() not in {".mp4", ".webm"}:
@@ -275,100 +323,143 @@ def main() -> None:
         raise SystemExit("--fps must be between 1 and 20")
     if args.output.exists():
         if not args.overwrite:
-            raise SystemExit(f"Ouput exists: {args.output} (pass --overwrite to replace it)")
+            raise SystemExit(
+                f"Output exists: {args.output} (pass --overwrite to replace it)"
+            )
         shutil.rmtree(args.output)
-    
+
     datapack = args.output / "datapack"
-    resourcepack = args.output/"resourcepack"
+    resourcepack = args.output / "resourcepack"
     has_audio = True
     function_dir = "functions" if args.legacy_folders else "function"
     tag_dir = "functions" if args.legacy_folders else "function"
     functions = datapack / "data" / NAMESPACE / function_dir
 
-    datapack_meta = {"pack": {"pack_format": args.pack_format, "description": "Video made with block video"}}
-    write(datapack/"pack.mcmeta",json.dumps(datapack_meta, indent=2))
+    datapack_meta = {
+        "pack": {
+            "pack_format": args.pack_format,
+            "description": "Video made with block video",
+        }
+    }
+    write(datapack / "pack.mcmeta", json.dumps(datapack_meta, indent=2))
     if has_audio:
-        resourcepack_meta = {"pack": {"pack_format": args.pack_format, "description": "Video made with Block Video"}}
+        resourcepack_meta = {
+            "pack": {
+                "pack_format": args.resource_pack_format,
+                "description": "Video made with Block Video",
+            }
+        }
         write(resourcepack / "pack.mcmeta", json.dumps(resourcepack_meta, indent=2))
-    write(datapack / "data/minecraft/tags" / tag_dir / "load.json",
-          json.dumps({"values": [f"{NAMESPACE}:load"]}, indent=2))
-    write(datapack / "data/minecraft/tags" / tag_dir / "tick.json",
-          json.dumps({"values": [f"{NAMESPACE}:tick"]}, indent=2))
-    
+    write(
+        datapack / "data/minecraft/tags" / tag_dir / "load.json",
+        json.dumps({"values": [f"{NAMESPACE}:load"]}, indent=2),
+    )
+    write(
+        datapack / "data/minecraft/tags" / tag_dir / "tick.json",
+        json.dumps({"values": [f"{NAMESPACE}:tick"]}, indent=2),
+    )
+
     if has_audio:
         sounds = {"video": {"sounds": [{"name": f"{NAMESPACE}:video", "stream": True}]}}
-        write(resourcepack / "assets" / NAMESPACE / "sounds.json", json.dumps(sounds, indent=2))
-        extract_audio(args.video, resourcepack / "assets" / NAMESPACE / "sounds/video.ogg")
-    
+        write(
+            resourcepack / "assets" / NAMESPACE / "sounds.json",
+            json.dumps(sounds, indent=2),
+        )
+        extract_audio(
+            args.video, resourcepack / "assets" / NAMESPACE / "sounds/video.ogg"
+        )
+
     codec, _, _, source_fps = probe_video(args.video)
     if not math.isfinite(source_fps) or source_fps <= 0:
-        source_fps=args.fps
+        source_fps = args.fps
     render_fps = min(args.fps, source_fps)
     if render_fps < args.fps:
-        print(f"source is only {source_fps:g} fps; using {render_fps:g} fps to keep duration the same")
+        print(
+            f"source is only {source_fps:g} fps; using {render_fps:g} fps to keep duration the same"
+        )
     width, height = args.size
     frame_stream = ffmpeg_frames(args.video, width, height, codec)
     palette_items = list(COLOR_PALETTE.items())
-    previous = [None] * (width*height)
+    previous = [None] * (width * height)
     output_index = 0
     commands_total = 0
     next_output_time = 0.0
     output_times = []
     media_end_time = 0.0
-    
 
     print(f"generating {width}x{height} at {render_fps:g} fps ({args.mode})...")
     for source_index, frame in enumerate(frame_stream):
         source_time = source_index / source_fps
-        frame_end_time = source_time + 1/ source_fps
+        frame_end_time = source_time + 1 / source_fps
         media_end_time = frame_end_time
         if source_time + 1e-9 < next_output_time:
             continue
-        next_output_time = (output_index +1) / render_fps
+        next_output_time = (output_index + 1) / render_fps
         frame_commands = []
         for py in range(height):
             for px in range(width):
-                offset = (py*width+px)*3
-                pixel = frame[offset:offset +3]
+                offset = (py * width + px) * 3
+                pixel = frame[offset : offset + 3]
                 if args.mode == "mono":
-                    luminance = int(pixel[2] * .2126 + pixel[1]*.7152+pixel[0]*.0722)
-                    block = args.foreground if luminance >= args.threshold else args.background
+                    luminance = int(
+                        pixel[2] * 0.2126 + pixel[1] * 0.7152 + pixel[0] * 0.0722
+                    )
+                    block = (
+                        args.foreground
+                        if luminance >= args.threshold
+                        else args.background
+                    )
                 else:
                     block = nearest_block(pixel, palette_items)
-                pos = py*width + px
+                pos = py * width + px
                 if previous[pos] == block:
                     continue
                 previous[pos] = block
                 bx, by, bz = coords(tuple(args.origin), args.plane, px, py)
                 frame_commands.append(f"setblock {bx} {by} {bz} {block}\n")
-        write(functions / "frames" /f"f{output_index}.mcfunction", "".join(frame_commands))
+        write(
+            functions / "frames" / f"f{output_index}.mcfunction",
+            "".join(frame_commands),
+        )
         commands_total += len(frame_commands)
-        output_times.appened(source_time)
+        output_times.append(source_time)
         output_index += 1
         if output_index % 100 == 0:
             print(f"  {output_index} frames", flush=True)
     if output_index == 0:
         raise SystemExit("The video contained no readable frames.")
 
-    tick_lines = [f"execute if score #playing {NAMESPACE} matches 1 run scoreboard players add #frame {NAMESPACE} 1\n"]
+    tick_lines = [
+        f"execute if score #playing {NAMESPACE} matches 1 run scoreboard players add #frame {NAMESPACE} 1\n"
+    ]
     for index, output_time in enumerate(output_times):
         game_tick = round(output_time * 20)
         tick_lines.append(
             f"execute if score #playing {NAMESPACE} matches 1 if score #frame {NAMESPACE} matches {game_tick} run function {NAMESPACE}:frames/f{index}\n"
         )
     final_tick = math.ceil(media_end_time * 20)
-    tick_lines.append(f"execute if score #frame {NAMESPACE} matches {final_tick}.. run scoreboard players set #playing {NAMESPACE} 0\n")
+    tick_lines.append(
+        f"execute if score #frame {NAMESPACE} matches {final_tick}.. run scoreboard players set #playing {NAMESPACE} 0\n"
+    )
     write(functions / "tick.mcfunction", "".join(tick_lines))
-    write(functions / "load.mcfunction",
-          f"scoreboard objectives add {NAMESPACE} dummy\nscoreboard players set #playing {NAMESPACE} 0\n")
+    write(
+        functions / "load.mcfunction",
+        f"scoreboard objectives add {NAMESPACE} dummy\nscoreboard players set #playing {NAMESPACE} 0\n",
+    )
     ox, oy, oz = args.origin
-    play_lines =[]
+    play_lines = []
     if has_audio:
         play_lines.append(f"stopsound @a master {NAMESPACE}:video\n")
-    play_lines.extend((f"scoreboard players set #frame {NAMESPACE} -1\n",
-                       f"scoreboard players set #playing {NAMESPACE} 1\n"))
+    play_lines.extend(
+        (
+            f"scoreboard players set #frame {NAMESPACE} -1\n",
+            f"scoreboard players set #playing {NAMESPACE} 1\n",
+        )
+    )
     if has_audio:
-        play_lines.append(f"playsound {NAMESPACE}:video master @a {ox} {oy} {oz} 1 1 1\n")
+        play_lines.append(
+            f"playsound {NAMESPACE}:video master @a {ox} {oy} {oz} 1 1 1\n"
+        )
     write(functions / "play.mcfunction", "".join(play_lines))
     stop = f"scoreboard players set #playing {NAMESPACE} 0\n"
     if has_audio:
@@ -376,9 +467,15 @@ def main() -> None:
     write(functions / "stop.mcfunction", stop)
 
     details = {
-        "video": str(args.video), "frames": output_index, "fps": render_fps,
-        "resolution": [width, height], "origin": args.origin, "plane": args.plane,
-        "mode": args.mode, "block_changes": commands_total, "audio": has_audio,
+        "video": str(args.video),
+        "frames": output_index,
+        "fps": render_fps,
+        "resolution": [width, height],
+        "origin": args.origin,
+        "plane": args.plane,
+        "mode": args.mode,
+        "block_changes": commands_total,
+        "audio": has_audio,
     }
     write(args.output / "generation.json", json.dumps(details, indent=2))
     make_zip(datapack, args.output / "datapack.zip")
@@ -393,4 +490,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-        
