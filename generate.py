@@ -301,4 +301,96 @@ def main() -> None:
         extract_audio(args.video, resourcepack / "assets" / NAMESPACE / "sounds/video.ogg")
     
     codec, _, _, source_fps = probe_video(args.video)
+    if not math.isfinite(source_fps) or source_fps <= 0:
+        source_fps=args.fps
+    render_fps = min(args.fps, source_fps)
+    if render_fps < args.fps:
+        print(f"source is only {source_fps:g} fps; using {render_fps:g} fps to keep duration the same")
+    width, height = args.size
+    frame_stream = ffmpeg_frames(args.video, width, height, codec)
+    palette_items = list(COLOR_PALETTE.items())
+    previous = [None] * (width*height)
+    output_index = 0
+    commands_total = 0
+    next_output_time = 0.0
+    output_times = []
+    media_end_time = 0.0
     
+
+    print(f"generating {width}x{height} at {render_fps:g} fps ({args.mode})...")
+    for source_index, frame in enumerate(frame_stream):
+        source_time = source_index / source_fps
+        frame_end_time = source_time + 1/ source_fps
+        media_end_time = frame_end_time
+        if source_time + 1e-9 < next_output_time:
+            continue
+        next_output_time = (output_index +1) / render_fps
+        frame_commands = []
+        for py in range(height):
+            for px in range(width):
+                offset = (py*width+px)*3
+                pixel = frame[offset:offset +3]
+                if args.mode == "mono":
+                    luminance = int(pixel[2] * .2126 + pixel[1]*.7152+pixel[0]*.0722)
+                    block = args.foreground if luminance >= args.threshold else args.background
+                else:
+                    block = nearest_block(pixel, palette_items)
+                pos = py*width + px
+                if previous[pos] == block:
+                    continue
+                previous[pos] = block
+                bx, by, bz = coords(tuple(args.origin), args.plane, px, py)
+                frame_commands.append(f"setblock {bx} {by} {bz} {block}\n")
+        write(functions / "frames" /f"f{output_index}.mcfunction", "".join(frame_commands))
+        commands_total += len(frame_commands)
+        output_times.appened(source_time)
+        output_index += 1
+        if output_index % 100 == 0:
+            print(f"  {output_index} frames", flush=True)
+    if output_index == 0:
+        raise SystemExit("The video contained no readable frames.")
+
+    tick_lines = [f"execute if score #playing {NAMESPACE} matches 1 run scoreboard players add #frame {NAMESPACE} 1\n"]
+    for index, output_time in enumerate(output_times):
+        game_tick = round(output_time * 20)
+        tick_lines.append(
+            f"execute if score #playing {NAMESPACE} matches 1 if score #frame {NAMESPACE} matches {game_tick} run function {NAMESPACE}:frames/f{index}\n"
+        )
+    final_tick = math.ceil(media_end_time * 20)
+    tick_lines.append(f"execute if score #frame {NAMESPACE} matches {final_tick}.. run scoreboard players set #playing {NAMESPACE} 0\n")
+    write(functions / "tick.mcfunction", "".join(tick_lines))
+    write(functions / "load.mcfunction",
+          f"scoreboard objectives add {NAMESPACE} dummy\nscoreboard players set #playing {NAMESPACE} 0\n")
+    ox, oy, oz = args.origin
+    play_lines =[]
+    if has_audio:
+        play_lines.append(f"stopsound @a master {NAMESPACE}:video\n")
+    play_lines.extend((f"scoreboard players set #frame {NAMESPACE} -1\n",
+                       f"scoreboard players set #playing {NAMESPACE} 1\n"))
+    if has_audio:
+        play_lines.append(f"playsound {NAMESPACE}:video master @a {ox} {oy} {oz} 1 1 1\n")
+    write(functions / "play.mcfunction", "".join(play_lines))
+    stop = f"scoreboard players set #playing {NAMESPACE} 0\n"
+    if has_audio:
+        stop += f"stopsound @a master {NAMESPACE}:video\n"
+    write(functions / "stop.mcfunction", stop)
+
+    details = {
+        "video": str(args.video), "frames": output_index, "fps": render_fps,
+        "resolution": [width, height], "origin": args.origin, "plane": args.plane,
+        "mode": args.mode, "block_changes": commands_total, "audio": has_audio,
+    }
+    write(args.output / "generation.json", json.dumps(details, indent=2))
+    make_zip(datapack, args.output / "datapack.zip")
+    if has_audio:
+        make_zip(resourcepack, args.output / "resourcepack.zip")
+    print(f"Done: {output_index} frames, {commands_total:,} block changes")
+    print(f"Datapack:      {args.output / 'datapack.zip'}")
+    if has_audio:
+        print(f"Resource pack: {args.output / 'resourcepack.zip'}")
+    print(f"In Minecraft run: /function {NAMESPACE}:play")
+
+
+if __name__ == "__main__":
+    main()
+        
