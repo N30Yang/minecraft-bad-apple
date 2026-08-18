@@ -10,7 +10,7 @@ The script creates:
 ## Requirements
 
 - Python 3.10+
-- 
+
 -[FFmpeg](https://ffmpeg.org/) available with 'ffmpeg'
 
 ## Generate the packs
