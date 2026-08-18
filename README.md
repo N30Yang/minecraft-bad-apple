@@ -4,7 +4,9 @@ Turn any `.mp4` or `.webm` into a datapack and resource that make that video pla
 The script creates:
 - a **datapack** that draws and animates the frames
 - **resource pack** for playing the audio, will play on the same tick as the datapack starting
+[![watch video](https://img.youtube.com/vi/pbrnvtbjSy4/0.jpg)](https://www.youtube.com/watch?v=pbrnvtbjSy4)
 
+# VIDEO ^^^
 ## Requirements
 
 - Python 3.10+
