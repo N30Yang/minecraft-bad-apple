@@ -106,3 +106,6 @@ The sound is played on the `master` channel with no distance fade, so every curr
 ## Version compatibility
 
 The defaults, data pack format `48`, resource pack format `34`, and singular `function` folders—target Java 1.21/1.21.1. For another release, pass its formats with `--pack-format` and `--resource-pack-format`. Minecraft 1.20.4 and older also needs `--legacy-folders`.
+
+
+## ZERO AI USED
