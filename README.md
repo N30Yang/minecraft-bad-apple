@@ -4,11 +4,13 @@ Turn any `.mp4` or `.webm` into a datapack and resource that make that video pla
 The script creates:
 - a **datapack** that draws and animates the frames
 - **resource pack** for playing the audio, will play on the same tick as the datapack starting
+[![watch video](https://img.youtube.com/vi/pbrnvtbjSy4/0.jpg)](https://www.youtube.com/watch?v=pbrnvtbjSy4)
 
+# VIDEO ^^^
 ## Requirements
 
 - Python 3.10+
--[FFmpeg](https://ffmpeg.org/) available with 'ffmpeg'
+- [FFmpeg](https://ffmpeg.org/) available with 'ffmpeg'
 
 ## Generate the packs
 
@@ -103,4 +105,7 @@ The sound is played on the `master` channel with no distance fade, so every curr
 
 ## Version compatibility
 
-The defaults—data pack format `48`, resource pack format `34`, and singular `function` folders—target Java 1.21/1.21.1. For another release, pass its formats with `--pack-format` and `--resource-pack-format`. Minecraft 1.20.4 and older also needs `--legacy-folders`.
+The defaults, data pack format `48`, resource pack format `34`, and singular `function` folders—target Java 1.21/1.21.1. For another release, pass its formats with `--pack-format` and `--resource-pack-format`. Minecraft 1.20.4 and older also needs `--legacy-folders`.
+
+
+## ZERO AI USED
