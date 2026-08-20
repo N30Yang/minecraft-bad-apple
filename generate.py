@@ -15,6 +15,7 @@ import zipfile
 from pathlib import Path
 
 NAMESPACE = "blockvideo"
+DISPATCH_LEAF_SIZE = 16
 
 COLOR_PALETTE = {
     "minecraft:black_concrete": (8, 10, 15),
@@ -191,6 +192,41 @@ def make_zip(source: Path, destination: Path) -> None:
             if file.is_file():
                 archive.write(file, file.relative_to(source))
 
+def write_dispatcher(functions: Path, output_times: list[float]) -> str:
+    tick_groups: list[tuple[int, list[int]]] = []
+    for frame_index, output_time in enumerate(output_times):
+        game_tick = round(output_time * 20)
+        if tick_groups and tick_groups[-1][0] == game_tick:
+            tick_groups[-1][1].append(frame_index)
+        else:
+            tick_groups.append((game_tick, [frame_index]))
+    next_node = 0
+
+    def build(groups: list[tuple[int, list[int]]]) -> tuple[str, int, int]:
+        nonlocal next_node
+        node_index = next_node
+        next_node += 1 
+        function_name = f"{NAMESPACE}:dispatch/d{node_index}"
+        if len(groups) <= DISPATCH_LEAF_SIZE:
+            lines = [
+                f"execute if score #frame {NAMESPACE} matches {game_tick} run function {NAMESPACE}:frames/f{frame_index}\n"
+                for game_tick, frame_indices in groups
+                for frame_index in frame_indices
+            ]
+        else:
+            midpoint = len[groups] // 2
+            left_name, left_min, left_max = build(groups[:midpoint])
+            right_name, right_min, right_max = build(groups[midpoint:])
+            lines = [
+               f"execute if score #frame {NAMESPACE} matches {left_min}..{left_max} run function {left_name}\n", 
+                f"execute if score #frame {NAMESPACE} matches {right_min}..{right_max} run function {right_name}\n",
+            ]
+        write(functions / "dispatch" / f"d{node_index}.mcfunction", "".join(lines))
+        return function_name, groups [-1][0]
+
+    root_name, _, _ = build(tick_groups)
+    return root_name
+
 
 def coords(
     origin: tuple[int, int, int], plane: str, x: int, y: int
@@ -201,6 +237,13 @@ def coords(
     if plane == "xz":
         return ox + x, oy, oz + y
     return ox, oy - y, oz + x
+
+def block_run_command(origin: tuple[int, int, int], plane: str, start_x: int, end_x: int, y: int, block:str) -> str:
+    start_bx, start_by, start_bz = coords(origin, plane, start_x, y)
+    if start_x == end_x:
+        return f"setblock {start_bx} {start_by} {start_bz} {block}\n"
+    end_bx, end_by, end_bz, = coords(origin, plane, end_x, y)
+    return f"fill {start_bx} {start_by} {start_bz} {end_bx} {end_by} {end_bz} {block}\n"
 
 
 def nearest_block(bgr, palette_items) -> str:
@@ -382,10 +425,12 @@ def main() -> None:
     palette_items = list(COLOR_PALETTE.items())
     previous = [None] * (width * height)
     output_index = 0
+    block_changes_total = 0
     commands_total = 0
     next_output_time = 0.0
     output_times = []
     media_end_time = 0.0
+    origin = tuple(args.origin)
 
     print(f"generating {width}x{height} at {render_fps:g} fps ({args.mode})...")
     for source_index, frame in enumerate(frame_stream):
@@ -397,6 +442,9 @@ def main() -> None:
         next_output_time = (output_index + 1) / render_fps
         frame_commands = []
         for py in range(height):
+            run_start = None
+            run_end = 0
+            run_block = None
             for px in range(width):
                 offset = (py * width + px) * 3
                 pixel = frame[offset : offset + 3]
@@ -413,10 +461,25 @@ def main() -> None:
                     block = nearest_block(pixel, palette_items)
                 pos = py * width + px
                 if previous[pos] == block:
+                    if run_start is not None:
+                        frame_commands.append(block_run_command(origin, args.plane, run_start, run_end, py, run_block))
+                        run_start = None
                     continue
                 previous[pos] = block
-                bx, by, bz = coords(tuple(args.origin), args.plane, px, py)
-                frame_commands.append(f"setblock {bx} {by} {bz} {block}\n")
+                block_changes_total += 1
+                if run_start is None:
+                    run_start = px
+                    run_end = px
+                    run_block = block
+                elif run_block == block:
+                    run_end = px
+                else:
+                    frame_commands.append(block_run_command(origin, args.plane, run_start, run_end, py, run_block))
+                    run_start = px
+                    run_end = px
+                    run_block = block
+            if run_start is not None:
+                frame_commands.append(block_run_command(origin, args.plane, run_start, run_end, py, run_block))
         write(
             functions / "frames" / f"f{output_index}.mcfunction",
             "".join(frame_commands),
@@ -429,14 +492,11 @@ def main() -> None:
     if output_index == 0:
         raise SystemExit("The video contained no readable frames.")
 
+    dispatcher = write_dispatcher(functions, output_times)
     tick_lines = [
-        f"execute if score #playing {NAMESPACE} matches 1 run scoreboard players add #frame {NAMESPACE} 1\n"
+        f"execute if score #playing {NAMESPACE} matches 1 run scoreboard players add #frame {NAMESPACE} 1\n",
+        f"execute if score #playing {NAMESPACE} matches 1 run function {dispatcher}\n",
     ]
-    for index, output_time in enumerate(output_times):
-        game_tick = round(output_time * 20)
-        tick_lines.append(
-            f"execute if score #playing {NAMESPACE} matches 1 if score #frame {NAMESPACE} matches {game_tick} run function {NAMESPACE}:frames/f{index}\n"
-        )
     final_tick = math.ceil(media_end_time * 20)
     tick_lines.append(
         f"execute if score #frame {NAMESPACE} matches {final_tick}.. run scoreboard players set #playing {NAMESPACE} 0\n"
@@ -474,14 +534,15 @@ def main() -> None:
         "origin": args.origin,
         "plane": args.plane,
         "mode": args.mode,
-        "block_changes": commands_total,
+        "block_changes": block_changes_total,
+        "commands": commands_total,
         "audio": has_audio,
     }
     write(args.output / "generation.json", json.dumps(details, indent=2))
     make_zip(datapack, args.output / "datapack.zip")
     if has_audio:
         make_zip(resourcepack, args.output / "resourcepack.zip")
-    print(f"Done: {output_index} frames, {commands_total:,} block changes")
+    print(f"Done: {output_index} frames, {block_changes_total:,} block changes, {commands_total:,} commands")
     print(f"Datapack:      {args.output / 'datapack.zip'}")
     if has_audio:
         print(f"Resource pack: {args.output / 'resourcepack.zip'}")
