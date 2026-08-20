@@ -7,4 +7,4 @@ if [ "$#" -eq 0 ]; then
     exec node "$SCRIPT_DIR/tui.js"
 fi
 
-exec python3 "SCRIPT_DIR/generate.py" "$@"
+exec python3 "$SCRIPT_DIR/generate.py" "$@"
