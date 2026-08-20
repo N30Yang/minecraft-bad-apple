@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Turn an MP4 or WebM video into a Minecraft video pack."""
-
 from __future__ import annotations
 
 import argparse
@@ -205,7 +203,7 @@ def write_dispatcher(functions: Path, output_times: list[float]) -> str:
     def build(groups: list[tuple[int, list[int]]]) -> tuple[str, int, int]:
         nonlocal next_node
         node_index = next_node
-        next_node += 1 
+        next_node += 1
         function_name = f"{NAMESPACE}:dispatch/d{node_index}"
         if len(groups) <= DISPATCH_LEAF_SIZE:
             lines = [
@@ -214,15 +212,15 @@ def write_dispatcher(functions: Path, output_times: list[float]) -> str:
                 for frame_index in frame_indices
             ]
         else:
-            midpoint = len[groups] // 2
+            midpoint = len(groups) // 2
             left_name, left_min, left_max = build(groups[:midpoint])
             right_name, right_min, right_max = build(groups[midpoint:])
             lines = [
-               f"execute if score #frame {NAMESPACE} matches {left_min}..{left_max} run function {left_name}\n", 
+                f"execute if score #frame {NAMESPACE} matches {left_min}..{left_max} run function {left_name}\n",
                 f"execute if score #frame {NAMESPACE} matches {right_min}..{right_max} run function {right_name}\n",
             ]
         write(functions / "dispatch" / f"d{node_index}.mcfunction", "".join(lines))
-        return function_name, groups [-1][0]
+        return function_name, groups[0][0], groups[-1][0]
 
     root_name, _, _ = build(tick_groups)
     return root_name
@@ -238,11 +236,11 @@ def coords(
         return ox + x, oy, oz + y
     return ox, oy - y, oz + x
 
-def block_run_command(origin: tuple[int, int, int], plane: str, start_x: int, end_x: int, y: int, block:str) -> str:
+def block_run_command(origin: tuple[int, int, int], plane: str, start_x: int, end_x: int, y: int, block: str) -> str:
     start_bx, start_by, start_bz = coords(origin, plane, start_x, y)
     if start_x == end_x:
         return f"setblock {start_bx} {start_by} {start_bz} {block}\n"
-    end_bx, end_by, end_bz, = coords(origin, plane, end_x, y)
+    end_bx, end_by, end_bz = coords(origin, plane, end_x, y)
     return f"fill {start_bx} {start_by} {start_bz} {end_bx} {end_by} {end_bz} {block}\n"
 
 
@@ -279,6 +277,17 @@ def extract_audio(video: Path, destination: Path) -> None:
         raise SystemExit("FFMpeg is required for audio. Install it and run again.")
     except subprocess.CalledProcessError:
         raise SystemExit("FFMpeg could not extract audio from this video.")
+
+
+def has_audio_stream(video: Path) -> bool:
+    command = ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries", "stream=index", "-of", "csv=p=0", str(video)]
+    try:
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
+        return bool(result.stdout.strip())
+    except FileNotFoundError:
+        raise SystemExit("FFmpeg and FFprobe are required. install and try again.")
+    except subprocess.CalledProcessError:
+        raise SystemExit("FFprobe could not inspect the video's audio streams.")
 
 
 def probe_video(video: Path) -> tuple[str, int, int, float]:
@@ -373,7 +382,7 @@ def main() -> None:
 
     datapack = args.output / "datapack"
     resourcepack = args.output / "resourcepack"
-    has_audio = True
+    has_audio = has_audio_stream(args.video)
     function_dir = "functions" if args.legacy_folders else "function"
     tag_dir = "functions" if args.legacy_folders else "function"
     functions = datapack / "data" / NAMESPACE / function_dir
